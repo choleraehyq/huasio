@@ -34,6 +34,7 @@ namespace huasio {
 				~blockingQueue(void);
 				void push(task_info &&task);
 				task_info pop(void);
+				int empty(void);
 			};
 			
 		public:
@@ -41,18 +42,20 @@ namespace huasio {
 			threadPool(const threadPool &) = delete;
 			threadPool &operator= (const threadPool &) = delete;
 			~threadPool(void);
-			std::future<int> reg(task_info &&task, Callback_t &&cb, std::promise<int> &&);
+			void reg(task_info &&task, Callback_t &&cb);
 			int rest(void);
+			std::unordered_map<int, std::promise<int>> ret_pool;
 		private:
 			blockingQueue tasks;
 			std::vector<std::thread> pool;
 			std::unordered_map<int, Callback_t> cb_pool;
-			std::unordered_map<int, std::promise<int>> ret_pool;
 			std::unordered_map<int, int> io_nbytes;
 			std::unordered_map<int, void *> bufmap;
 			int nthreads;
 			std::atomic<int> cur_event;
-			void event_loop(int &epfd, struct epoll_event &&);
+			std::atomic<bool> isStop;
+			void event_loop(int &epfd);
+			void add_event_if_exist(int &epfd);
 	};
 	void threadPool::blockingQueue::push(task_info &&task) {
 		std::unique_lock<std::mutex> lock(this->add_mtx);
@@ -72,33 +75,40 @@ namespace huasio {
 		this->add_cv.notify_one();
 		return tmp;
 	}
+	int threadPool::blockingQueue::empty(void) {
+		std::unique_lock<std::mutex> lock(this->del_mtx);
+		return this->queue.empty();
+	}
 	threadPool::blockingQueue::~blockingQueue(void) {
 		std::unique_lock<std::mutex> lock(this->del_mtx);
 		while ( !this->queue.empty() ) {
 			this->queue.pop();
 		}
 	}
-	void threadPool::event_loop(int &epfd,struct epoll_event &&ev) {
-		task_info &&task = this->tasks.pop();
-		switch (task.flag) {
-			case event::READ: 
-				ev.events = EPOLLIN | EPOLLPRI;
-				break;
-			case event::WRITE: 
-				ev.events = EPOLLOUT;
-				break;	
-			case event::EXIT:
-				exit(0);
-		}
+	void threadPool::add_event_if_exist(int &epfd) {
+		if (!(this->tasks).empty()) {
+			struct epoll_event ev;
+			task_info &&task = this->tasks.pop();
+			switch (task.flag) {
+				case event::READ: 
+					ev.events = EPOLLIN | EPOLLPRI;
+					break;
+				case event::WRITE: 
+					ev.events = EPOLLOUT;
+					break;	
+			}
 		
-		ev.data.fd = task.fd;
-		this->io_nbytes[task.fd] = task.num * task.size;
-		this->bufmap[task.fd] = task.buf;
-		if (epoll_ctl(epfd, EPOLL_CTL_ADD, task.fd, &ev) == -1) {
-			printf("%d\n", errno);
-			errexit("epoll_ctl error");
+			ev.data.fd = task.fd;
+			this->io_nbytes[task.fd] = task.num * task.size;
+			this->bufmap[task.fd] = task.buf;
+			if (epoll_ctl(epfd, EPOLL_CTL_ADD, task.fd, &ev) == -1) {
+				printf("%d\n", errno);
+				errexit("epoll_ctl error");
+			}
+			this->cur_event++;
 		}
-		this->cur_event++;
+	}
+	void threadPool::event_loop(int &epfd) {
 		struct epoll_event evlist[MAX];
 		int ready = epoll_wait(epfd, evlist, MAX, CIRCLE);
 		if (ready == -1) {
@@ -118,7 +128,7 @@ namespace huasio {
 					errexit("write");
 				}
 			}
-			if (epoll_ctl(epfd, EPOLL_CTL_DEL, evlist[i].data.fd, &ev) == -1) {
+			if (epoll_ctl(epfd, EPOLL_CTL_DEL, evlist[i].data.fd, NULL) == -1) {
 				errexit("epoll_ctl del error");
 			}
 			this->ret_pool[evlist[i].data.fd].set_value(retval);
@@ -126,40 +136,33 @@ namespace huasio {
 			this->cur_event--;
 		}	
 	}
-	threadPool::threadPool(int num):nthreads(num),cur_event(0) {
+	threadPool::threadPool(int num)
+		:nthreads(num),cur_event(0),isStop(false) {
 		for (int i = 0; i < num; i++) {
 			pool.emplace_back([this]() {
 				int epfd = epoll_create(MAX);
 				if (epfd < 0) { 
 					errexit("epoll_create in threadPool() error");
 				}
-				struct epoll_event ev;
-
-				while (true) {
-					this->event_loop(epfd, std::move(ev));
+				while (!isStop.load()) {
+					this->add_event_if_exist(epfd);
+					this->event_loop(epfd);
 				}
 			});
 		}
 	}
-	std::future<int> threadPool::reg(task_info &&task, 
-			Callback_t &&cb,
-			std::promise<int> &&retval) {
+	void threadPool::reg(task_info &&task, 
+			Callback_t &&cb) {
 		this->cb_pool[task.fd] = std::forward<Callback_t>(cb);
 		this->tasks.push(std::forward<task_info>(task));
-		this->ret_pool[task.fd] = std::forward<std::promise<int>>(retval);
-		return this->ret_pool[task.fd].get_future();
 	}
 	int threadPool::rest(void) {
 		return this->cur_event.load();
 	}
 	threadPool::~threadPool() {
-		for (std::thread &worker: pool) {
-			worker.detach();
-		}
-		for (int i = 0; i < nthreads; i++) {
-			task_info exitsig;
-			exitsig.flag = event::EXIT;
-			this->tasks.push(std::move(exitsig));
+		this->isStop.store(true);
+		for (auto &worker : this->pool) {
+			worker.join();
 		}
 	}
 
@@ -171,11 +174,14 @@ namespace huasio {
 	std::future<int> as_reg(task_info task, 
 			Callback_t cb) {
 		std::promise<int> retval;
-		return _pool->reg(std::move(task), std::move(cb), 
-				std::move(retval));
-		
+		_pool->ret_pool[task.fd] = std::move(retval);
+		_pool->reg(std::move(task), std::move(cb));
+		return _pool->ret_pool[task.fd].get_future();
 	}
 	int as_left(void) {
 		return _pool->rest();
+	}
+	void as_wait(void) {
+		_pool.reset();
 	}
 }

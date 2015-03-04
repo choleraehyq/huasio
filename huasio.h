@@ -11,7 +11,6 @@ namespace huasio {
 	enum class event {
 		READ,
 		WRITE,
-		EXIT
 	};
 	struct task_info_s {
 		int fd;
