@@ -1,4 +1,4 @@
-#include "huasio.h"
+#include "huio.h"
 #include "err.h"
 
 #include <cstddef>
@@ -15,7 +15,7 @@
 #include <unistd.h>
 #include <sys/epoll.h>
 
-namespace huasio {
+namespace huio {
 	
 	class threadPool {
 		private:

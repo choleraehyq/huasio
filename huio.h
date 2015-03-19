@@ -1,11 +1,11 @@
-#ifndef _HUASIO_H
-#define _HUASIO_H
+#ifndef _HUIO_H
+#define _HUIO_H
 
 #include <functional>
 #include <future>
 #include <cstddef>
 
-namespace huasio {
+namespace huio {
 	const int MAX = 100;
 	const int CIRCLE = 10; // ms
 	enum class event {

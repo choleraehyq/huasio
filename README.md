@@ -1,7 +1,7 @@
-# huasio
-A toy asychronized-io library.
+# huio
+A toy asychronized-io and non-blocking io library.
 
-It can successfully run on Ubuntu14.04 compiled by g++4.9.2.
+It can successfully run on Ubuntu14.10 compiled by g++4.9.1.
 This library is based on epoll and threadpool. The multi-thread part is implemented by C++11. 
 
 Because of epoll, this library isn't support file operation.
