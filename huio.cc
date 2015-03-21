@@ -14,8 +14,10 @@
 #include <queue>
 #include <unistd.h>
 #include <fcntl.h>
+#include <select.h>
 #include <sys/epoll.h>
 #include <sys/uio.h>
+#include <sys/socket.h>
 
 namespace huio {
 	
@@ -250,7 +252,75 @@ namespace huio {
 		return n;
 	}
 	
-	int nb_connect(int fd, const struct sockaddr *addr, socklen_t len) {
+	struct sockaddr_in getLocalAddr(int fd) {
+		struct sockaddr_in localAddr;
+		memset(&localAddr, 0, sizeof(localAddr));
+		socklen_t addrlen = static_cast<socklen_t>(sizeof(localAddr));
+		if (getsockname(fd, &localAddr, addrlen) < 0) {
+			errexit("getLocalAddr");
+		}
+		return localAddr;
+	}
 
+	struct sockaddt_in getRemoteAddr(int fd) {
+		struct sockaddr_in remoteAddr;
+		memset(&remoteAddr, 0, sizeof(remoteAddr));
+		socklen_t addrlen = static_cast<socklen_t>(sizeof(remoteAddr));
+		if (getpeername(fd, &remoteAddr, addrlen) < 0) {
+			errexit("getRemoteAddr");
+		}
+		return remoteAddr;
+	}
+
+	bool isSelfConnection(int fd) {
+		struct sockaddr_in localAddr = getLocalAddr(fd);
+		struct sockaddr_in remoteAddr = getRemoteAddr(fd);
+		return localAddr.sin_port == remoteAddr.sin_port 
+			&& localAddr.sin_addr.s_addr == remoteAddr.sin_addr.s_addr;
+	}
+
+	int nb_connect(int fd, const struct sockaddr *addr, socklen_t len) {
+		if (connect(fd, addr, len) == 0) {
+			return 0;
+		}
+		else if (errno != EINPROGRESS || errno != EINTR) {
+				close(fd);
+				return -1;
+			}
+		}
+		if (isSelfConnection(fd)) {
+			close(fd);
+			return -1;
+		}
+		fd_set wset, rset;
+		FD_ZERO(&wset);
+		FD_ZERO(&rset);
+		FD_SET(fd, &rset);
+		FD_SET(fd, &wset);
+		if ((n == select(fd+1, &rset, &wset, NULL, NULL)) == 0) {
+			close(fd);
+			errno = ETIMEDOUT;
+			return -1;
+		}
+		else if (n == -1) {
+			close(fd);
+			errexit("select in nb_connect");
+		}
+		if (FD_ISSET(fd, &rset) || FD_ISSET(fd, &wset)) {
+			int optval;
+			len = sizeof(optval);
+			if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &optval, &len) < 0) {
+				close(fd);
+				errexit("getsockopt");
+			}
+		}
+		else {
+			close(fd);
+			errexit("fd not set");
+		}
+		if (optval) {
+			close(fd);
+			return -1;
+		}
 	}
 }
