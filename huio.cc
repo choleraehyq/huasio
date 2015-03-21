@@ -13,7 +13,9 @@
 #include <unordered_map>
 #include <queue>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/epoll.h>
+#include <sys/uio.h>
 
 namespace huio {
 	
@@ -57,6 +59,7 @@ namespace huio {
 			void event_loop(int &epfd);
 			void add_event_if_exist(int &epfd);
 	};
+
 	void threadPool::blockingQueue::push(task_info &&task) {
 		std::unique_lock<std::mutex> lock(this->add_mtx);
 		this->add_cv.wait(lock, [this](){ 
@@ -65,6 +68,7 @@ namespace huio {
 		this->queue.push(std::forward<task_info>(task));
 			this->del_cv.notify_one();
 	}
+
 	task_info threadPool::blockingQueue::pop(void) {
 		std::unique_lock<std::mutex> lock(this->add_mtx);
 		this->del_cv.wait(lock, [this](){
@@ -75,6 +79,7 @@ namespace huio {
 		this->add_cv.notify_one();
 		return tmp;
 	}
+
 	int threadPool::blockingQueue::empty(void) {
 		std::unique_lock<std::mutex> lock(this->del_mtx);
 		return this->queue.empty();
@@ -85,6 +90,7 @@ namespace huio {
 			this->queue.pop();
 		}
 	}
+
 	void threadPool::add_event_if_exist(int &epfd) {
 		if (!(this->tasks).empty()) {
 			struct epoll_event ev;
@@ -108,6 +114,7 @@ namespace huio {
 			this->cur_event++;
 		}
 	}
+
 	void threadPool::event_loop(int &epfd) {
 		struct epoll_event evlist[MAX];
 		int ready = epoll_wait(epfd, evlist, MAX, CIRCLE);
@@ -151,14 +158,17 @@ namespace huio {
 			});
 		}
 	}
+
 	void threadPool::reg(task_info &&task, 
 			Callback_t &&cb) {
 		this->cb_pool[task.fd] = std::forward<Callback_t>(cb);
 		this->tasks.push(std::forward<task_info>(task));
 	}
+
 	int threadPool::rest(void) {
 		return this->cur_event.load();
 	}
+
 	threadPool::~threadPool() {
 		this->isStop.store(true);
 		for (auto &worker : this->pool) {
@@ -171,6 +181,7 @@ namespace huio {
 	void as_init(int nthreads) {
 		_pool = std::make_shared<threadPool>(nthreads);
 	}
+
 	std::future<int> as_reg(task_info task, 
 			Callback_t cb) {
 		std::promise<int> retval;
@@ -178,10 +189,68 @@ namespace huio {
 		_pool->reg(std::move(task), std::move(cb));
 		return _pool->ret_pool[task.fd].get_future();
 	}
+
 	int as_left(void) {
 		return _pool->rest();
 	}
+
 	void as_wait(void) {
 		_pool.reset();
+	}
+}
+
+namespace huio {
+
+	void nb_setfd(int fd) {
+		int flags = fcntl(fd, F_GETFL);
+		assert(flags == 0);
+		flags |= O_NONBLOCK;
+		int err = fcntl(fd, F_SETFL, flags);
+		assert(err==0);
+	}
+
+	ssize_t nb_read(int fd, buffer &buf, int *savedErrno) {
+		return buf.read(fd, savedErrno);
+	}
+
+	ssize_t nb_write(int fd, buffer &buf, int *savedErrno) {
+		return buf.write(fd, savedErrno);
+	}
+
+	ssize_t buffer::read(int fd, int *savedErrno) {
+		char extrabuf[64 * 1024];
+		struct iovec vec[2];
+		const size_t writable = writableBytes();
+		vec[0].iov_base = begin() + writeIndex;
+		vec[0].iov_len = writable;
+		vec[1].iov_base = extrabuf;
+		vec[1].iov_len = len - writable;
+		ssize_t n = readv(fd, vec, 2);
+		if (n < 0) {
+			*savedErrno = errno;
+		}
+		else if (static_cast<size_t>(n) <= writable) {
+			hasWritten(n);
+		}
+		else {
+			writeIndex = data.size();
+			append(extrabuf, n - writable);
+		}
+		return n;
+	}
+
+	ssize_t buffer::write(int fd, int *savedErrno) {
+		ssize_t n = write(fd, begin(), readableBytes());
+		if (n < 0) {
+			*savedErrno = errno;
+		}
+		else if (static_cast<size_t>(n) <= readableBytes()) {
+			hasRead(n);
+		}
+		return n;
+	}
+	
+	int nb_connect(int fd, const struct sockaddr *addr, socklen_t len) {
+
 	}
 }
