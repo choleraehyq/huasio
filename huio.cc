@@ -262,7 +262,7 @@ namespace huio {
 		return localAddr;
 	}
 
-	struct sockaddt_in getRemoteAddr(int fd) {
+	struct sockaddr_in getRemoteAddr(int fd) {
 		struct sockaddr_in remoteAddr;
 		memset(&remoteAddr, 0, sizeof(remoteAddr));
 		socklen_t addrlen = static_cast<socklen_t>(sizeof(remoteAddr));
@@ -322,5 +322,6 @@ namespace huio {
 			close(fd);
 			return -1;
 		}
+		return 0;
 	}
 }
