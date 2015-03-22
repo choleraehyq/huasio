@@ -1,10 +1,9 @@
 # huio
 A toy asychronized-io and non-blocking io library.
 
-It can successfully run on Ubuntu14.10 compiled by g++4.9.1.
-This library is based on epoll and threadpool. The multi-thread part is implemented by C++11. 
+The asychronized part can successfully run on Ubuntu14.10 compiled by g++4.9.1  and the non-blocking part is not very reliable now.
 
-Because of epoll, this library isn't support file operation.
+The asychronized part of this library is based on epoll and threadpool. The multi-thread part is implemented by C++11. Because of epoll, the asychronized part isn't support file operation.
 
 ##API:
 
