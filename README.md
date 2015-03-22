@@ -23,3 +23,19 @@ This function will return the imcomplete IO events.
 void as_wait(void)
 
 This function will block until all the registered IO event completed.
+
+void nb_setfd(int fd)
+
+Set the socket fd non-block.
+
+ssize_t nb_read(int fd,	buffer& buf, int \*savedErrno)
+
+The non-blocking read operation. You should initialize a buf which store the data first, the type of buf is buffer. The savedErrno is the errno of the read syscall, user should ensure the space which this pointer points to is available. This operation will try to read all readable data from the given fd.
+
+ssize_t nb_write(int fd, buffer& buf, int \*savedErrno)
+
+The non-blocking write operation. This operation will try to write all writable data in buf to fd.
+
+int nb_connect(int fd, const struct sockaddr \*addr, socklen_t len)
+
+The non-blocking version of connect(). It's usage is the same as connect(). When the operation succeeds it will return 0, otherwise -1. 
