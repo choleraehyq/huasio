@@ -45,10 +45,10 @@ namespace huio {
 		size_t readableBytes() const {
 			return writeIndex - readIndex;
 		}
-		char *begin() const {
+		char *begin() {
 			return &*data.begin();
 		}
-		char *beginWrite() const {
+		char *beginWrite() {
 			return begin() + writeIndex;
 		}
 		void hasWritten(size_t len) {
@@ -93,7 +93,7 @@ namespace huio {
 		//implicit copy-ctor, move-ctor, dtor and assignment is ok.
 		ssize_t read(int fd, int *savedErrno);
 		ssize_t write(int fd, int *savedErrno);
-	}
+	};
 
 	void nb_setfd(int fd);
 	ssize_t nb_read(int fd, buffer &buf, int *savedErrno);

@@ -12,12 +12,14 @@
 #include <vector>
 #include <unordered_map>
 #include <queue>
+#include <cstring>
 #include <unistd.h>
 #include <fcntl.h>
-#include <select.h>
+#include <sys/select.h>
 #include <sys/epoll.h>
 #include <sys/uio.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
 
 namespace huio {
 	
@@ -109,9 +111,9 @@ namespace huio {
 			ev.data.fd = task.fd;
 			this->io_nbytes[task.fd] = task.num * task.size;
 			this->bufmap[task.fd] = task.buf;
-			if (epoll_ctl(epfd, EPOLL_CTL_ADD, task.fd, &ev) == -1) {
+			if (::epoll_ctl(epfd, EPOLL_CTL_ADD, task.fd, &ev) == -1) {
 				printf("%d\n", errno);
-				errexit("epoll_ctl error");
+				errexit("::epoll_ctl error");
 			}
 			this->cur_event++;
 		}
@@ -119,9 +121,9 @@ namespace huio {
 
 	void threadPool::event_loop(int &epfd) {
 		struct epoll_event evlist[MAX];
-		int ready = epoll_wait(epfd, evlist, MAX, CIRCLE);
+		int ready = ::epoll_wait(epfd, evlist, MAX, CIRCLE);
 		if (ready == -1) {
-			errexit("epoll_wait");
+			errexit("::epoll_wait");
 		}
 		for (int i = 0; i < ready; i++) {
 			int retval;
@@ -137,8 +139,8 @@ namespace huio {
 					errexit("write");
 				}
 			}
-			if (epoll_ctl(epfd, EPOLL_CTL_DEL, evlist[i].data.fd, NULL) == -1) {
-				errexit("epoll_ctl del error");
+			if (::epoll_ctl(epfd, EPOLL_CTL_DEL, evlist[i].data.fd, NULL) == -1) {
+				errexit("::epoll_ctl del error");
 			}
 			this->ret_pool[evlist[i].data.fd].set_value(retval);
 			this->cb_pool[evlist[i].data.fd]();
@@ -149,9 +151,9 @@ namespace huio {
 		:nthreads(num),cur_event(0),isStop(false) {
 		for (int i = 0; i < num; i++) {
 			pool.emplace_back([this]() {
-				int epfd = epoll_create(MAX);
+				int epfd = ::epoll_create(MAX);
 				if (epfd < 0) { 
-					errexit("epoll_create in threadPool() error");
+					errexit("::epoll_create in threadPool() error");
 				}
 				while (!isStop.load()) {
 					this->add_event_if_exist(epfd);
@@ -226,8 +228,8 @@ namespace huio {
 		vec[0].iov_base = begin() + writeIndex;
 		vec[0].iov_len = writable;
 		vec[1].iov_base = extrabuf;
-		vec[1].iov_len = len - writable;
-		ssize_t n = readv(fd, vec, 2);
+		vec[1].iov_len = 64 * 1024;
+		ssize_t n = ::readv(fd, vec, 2);
 		if (n < 0) {
 			*savedErrno = errno;
 		}
@@ -242,7 +244,7 @@ namespace huio {
 	}
 
 	ssize_t buffer::write(int fd, int *savedErrno) {
-		ssize_t n = write(fd, begin(), readableBytes());
+		ssize_t n = ::write(fd, begin(), readableBytes());
 		if (n < 0) {
 			*savedErrno = errno;
 		}
@@ -254,9 +256,9 @@ namespace huio {
 	
 	struct sockaddr_in getLocalAddr(int fd) {
 		struct sockaddr_in localAddr;
-		memset(&localAddr, 0, sizeof(localAddr));
+		::memset(&localAddr, 0, sizeof(localAddr));
 		socklen_t addrlen = static_cast<socklen_t>(sizeof(localAddr));
-		if (getsockname(fd, &localAddr, addrlen) < 0) {
+		if (::getsockname(fd, reinterpret_cast<struct sockaddr *>(&localAddr), &addrlen) < 0) {
 			errexit("getLocalAddr");
 		}
 		return localAddr;
@@ -264,9 +266,9 @@ namespace huio {
 
 	struct sockaddr_in getRemoteAddr(int fd) {
 		struct sockaddr_in remoteAddr;
-		memset(&remoteAddr, 0, sizeof(remoteAddr));
+		::memset(&remoteAddr, 0, sizeof(remoteAddr));
 		socklen_t addrlen = static_cast<socklen_t>(sizeof(remoteAddr));
-		if (getpeername(fd, &remoteAddr, addrlen) < 0) {
+		if (::getpeername(fd, reinterpret_cast<struct sockaddr *>(&remoteAddr), &addrlen) < 0) {
 			errexit("getRemoteAddr");
 		}
 		return remoteAddr;
@@ -280,16 +282,15 @@ namespace huio {
 	}
 
 	int nb_connect(int fd, const struct sockaddr *addr, socklen_t len) {
-		if (connect(fd, addr, len) == 0) {
+		if (::connect(fd, addr, len) == 0) {
 			return 0;
 		}
 		else if (errno != EINPROGRESS || errno != EINTR) {
-				close(fd);
+				::close(fd);
 				return -1;
-			}
 		}
 		if (isSelfConnection(fd)) {
-			close(fd);
+			::close(fd);
 			return -1;
 		}
 		fd_set wset, rset;
@@ -297,29 +298,30 @@ namespace huio {
 		FD_ZERO(&rset);
 		FD_SET(fd, &rset);
 		FD_SET(fd, &wset);
-		if ((n == select(fd+1, &rset, &wset, NULL, NULL)) == 0) {
-			close(fd);
+		int n;
+		if ((n == ::select(fd+1, &rset, &wset, NULL, NULL)) == 0) {
+			::close(fd);
 			errno = ETIMEDOUT;
 			return -1;
 		}
 		else if (n == -1) {
-			close(fd);
+			::close(fd);
 			errexit("select in nb_connect");
 		}
+		int optval;
 		if (FD_ISSET(fd, &rset) || FD_ISSET(fd, &wset)) {
-			int optval;
 			len = sizeof(optval);
-			if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &optval, &len) < 0) {
-				close(fd);
+			if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &optval, &len) < 0) {
+				::close(fd);
 				errexit("getsockopt");
 			}
 		}
 		else {
-			close(fd);
+			::close(fd);
 			errexit("fd not set");
 		}
 		if (optval) {
-			close(fd);
+			::close(fd);
 			return -1;
 		}
 		return 0;
